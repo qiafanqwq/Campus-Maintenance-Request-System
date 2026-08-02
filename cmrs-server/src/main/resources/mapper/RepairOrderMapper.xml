@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="com.cmrs.mapper.RepairOrderMapper">
+    <select id="pageQueryWithJoin" resultType="RepairOrderVO">
+        SELECT
+        ro.id, ro.nickname, ro.user_phone, ro.address, ro.category_name,
+        ro.description, ro.expect_time, ro.remark, ro.create_time, ro.feedback,
+        -- 获取最新的维修记录信息
+        latest_rr.rr_id, latest_rr.repairman_name, latest_rr.repair_time,
+        latest_rr.repair_process, latest_rr.status,
+        -- 统计该报修单有多少条维修记录（用于前端判断是否有历史）
+        record_count.total_count
+        FROM repair_order ro
+        -- 获取每个报修单最新的维修记录（子查询）
+        LEFT JOIN (
+        SELECT
+        rr1.*,
+        ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY rr1.update_time DESC, rr1.rr_id DESC) as rn
+        FROM repair_record rr1
+        ) latest_rr ON ro.id = latest_rr.order_id AND latest_rr.rn = 1
+        -- 统计每个报修单的维修记录总数（子查询）
+        LEFT JOIN (
+        SELECT
+        order_id,
+        COUNT(*) as total_count
+        FROM repair_record
+        GROUP BY order_id
+        ) record_count ON ro.id = record_count.order_id
+        <where>
+            <if test="id != null and id !=''">
+                and ro.id like concat('%',#{id},'%')
+            </if>
+            <if test="address != null and address != ''">
+                and ro.address like concat('%',#{address},'%')
+            </if>
+            <if test="repairmanName != null and repairmanName != ''">
+                and latest_rr.repairman_name like concat('%',#{repairmanName},'%')
+            </if>
+            <if test="nickName != null and nickName != ''">
+                and ro.nickname like concat('%',#{nickName},'%')
+            </if>
+            <if test="status != null and status != ''">
+                and latest_rr.status = #{status}
+            </if>
+            <if test="repairTime != null and repairTime != ''">
+                and latest_rr.repair_time like concat(#{repairTime}, '%')
+            </if>
+        </where>
+        ORDER BY ro.create_time DESC
+    </select>
+
+
+    <update id="update" parameterType="RepairOrder">
+        update repair_order
+        <set>
+            <if test="nickName != null">nickname = #{nickName},</if>
+            <if test="userPhone != null">user_phone = #{userPhone},</if>
+            <if test="address != null">address = #{address},</if>
+            <if test="categoryName != null">category_name = #{categoryName},</if>
+            <if test="description != null">description = #{description},</if>
+            <if test="expectTime != null">expect_time = #{expectTime},</if>
+            <if test="remark != null">remark = #{remark},</if>
+            <if test="feedback != null">feedback = #{feedback},</if>
+            <if test="updateTime != null">update_time = #{updateTime},</if>
+        </set>
+        where id = #{id}
+    </update>
+
+    <select id="getByUserId" resultType="RepairOrderVO">
+        select ro.id, ro.nickname, ro.user_phone, ro.address, ro.category_name,
+               ro.description, ro.expect_time, ro.remark, ro.create_time, ro.feedback,
+               rr.rr_id ,rr.repairman_name, rr.repair_time, rr.repair_process, rr.status
+        from repair_record rr
+        inner join repair_order ro on rr.order_id = ro.id
+        where ro.user_id = #{userId}
+        ORDER BY rr.repair_time DESC
+    </select>
+
+
+    <select id="selectBaseOrderById" resultType="RepairOrderVO">
+        SELECT
+            id,
+            nickname,
+            user_phone,
+            address,
+            category_name,
+            description,
+            expect_time,
+            remark,
+            feedback,
+            create_time
+        FROM repair_order
+        WHERE id = #{orderId}
+    </select>
+
+
+
+
+
+
+    <!-- 公共查询条件 -->
+    <sql id="commonWhere">
+        <where>
+            <if test="params.id != null">AND ro.id = #{params.id}</if>
+            <if test="params.nickName != null and params.nickName != ''">AND ro.nickname LIKE CONCAT('%', #{params.nickName}, '%')</if>
+            <if test="params.address != null and params.address != ''">AND ro.address LIKE CONCAT('%', #{params.address}, '%')</if>
+            <if test="params.repairmanName != null and params.repairmanName != ''">AND rr.repairman_name LIKE CONCAT('%', #{params.repairmanName}, '%')</if>
+            <if test="params.status != null">AND rr.status = #{params.status}</if>
+            <if test="params.repairTime != null and params.repairTime != ''">AND DATE(rr.repair_time) = #{params.repairTime}</if>
+        </where>
+    </sql>
+
+    <!-- 按地址统计 -->
+    <select id="statByAddress" resultType="com.cmrs.vo.RepairStatisticsVO$AddressStatVO">
+        SELECT
+        ro.address,
+        COUNT(ro.id) AS count
+        FROM repair_order ro
+        INNER JOIN repair_record rr ON ro.id = rr.order_id
+        <include refid="commonWhere"/>
+        GROUP BY ro.address
+        ORDER BY count DESC
+    </select>
+
+    <!-- 按处理时间统计 -->
+    <select id="statByTime" resultType="com.cmrs.vo.RepairStatisticsVO$TimeStatVO">
+        SELECT
+        DATE(rr.repair_time) AS date,
+        COUNT(ro.id) AS count
+        FROM repair_order ro
+        INNER JOIN repair_record rr ON ro.id = rr.order_id
+        <include refid="commonWhere"/>
+        AND rr.repair_time IS NOT NULL
+        GROUP BY DATE(rr.repair_time)
+        ORDER BY date ASC
+    </select>
+
+    <!-- 按状态统计 -->
+    <select id="statByStatus" resultType="com.cmrs.vo.RepairStatisticsVO$StatusStatVO">
+        SELECT
+        rr.status,
+        CASE
+        WHEN rr.status = 0 THEN '待处理'
+        WHEN rr.status = 1 THEN '处理中'
+        WHEN rr.status = 2 THEN '已完成'
+        WHEN rr.status = 3 THEN '已取消'
+        WHEN rr.status = 4 THEN '待转发'
+        END AS statusName,
+        COUNT(ro.id) AS count
+        FROM repair_order ro
+        INNER JOIN repair_record rr ON ro.id = rr.order_id
+        <include refid="commonWhere"/>
+        GROUP BY rr.status
+        ORDER BY rr.status ASC
+    </select>
+
+    <!-- 总统计 -->
+    <select id="statTotal" resultType="com.cmrs.vo.RepairStatisticsVO$TotalStatVO">
+        SELECT
+        COUNT(ro.id) AS totalCount,
+        SUM(CASE WHEN rr.status = 0 THEN 1 ELSE 0 END) AS pendingCount,
+        SUM(CASE WHEN rr.status = 1 THEN 1 ELSE 0 END) AS processingCount,
+        SUM(CASE WHEN rr.status = 2 THEN 1 ELSE 0 END) AS completedCount,
+        SUM(CASE WHEN rr.status = 3 THEN 1 ELSE 0 END) AS cancelledCount,
+        SUM(CASE WHEN rr.status = 4 THEN 1 ELSE 0 END) AS pendingTransferCount
+        FROM repair_order ro
+        INNER JOIN repair_record rr ON ro.id = rr.order_id
+        <include refid="commonWhere"/>
+    </select>
+</mapper>
